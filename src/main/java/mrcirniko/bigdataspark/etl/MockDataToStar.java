@@ -27,7 +27,6 @@ public class MockDataToStar {
         pgProps.setProperty("password", pgPass);
         pgProps.setProperty("driver", "org.postgresql.Driver");
 
-        // 1) Читаем staging как есть
         Dataset<Row> stgRaw = spark.read()
                 .format("jdbc")
                 .option("url", pgUrl)
@@ -37,13 +36,10 @@ public class MockDataToStar {
                 .option("driver", pgProps.getProperty("driver"))
                 .load();
 
-        // 2) Нормализуем типы (даты и числа)
         Dataset<Row> stg = stgRaw
-                // даты -> DateType
                 .withColumn("sale_date",            toDateAny(col("sale_date")))
                 .withColumn("product_release_date", toDateAny(col("product_release_date")))
                 .withColumn("product_expiry_date",  toDateAny(col("product_expiry_date")))
-                // числа -> numeric/int/decimal
                 .withColumn("product_weight",   col("product_weight").cast("decimal(10,2)"))
                 .withColumn("product_rating",   col("product_rating").cast("decimal(10,2)"))
                 .withColumn("product_reviews",  col("product_reviews").cast("int"))
@@ -51,11 +47,11 @@ public class MockDataToStar {
                 .withColumn("sale_quantity",    col("sale_quantity").cast("int"))
                 .withColumn("sale_total_price", col("sale_total_price").cast("decimal(18,2)"));
 
-        // 3) Dimensions
         loadDim(stg,
                 "sale_customer_id",
                 "sale_date",
-                new String[]{"customer_first_name","customer_last_name","customer_age","customer_email","customer_country","customer_postal_code"},
+                new String[]{"customer_first_name","customer_last_name","customer_age","customer_email",
+                        "customer_country","customer_postal_code"},
                 new String[][]{
                         {"sale_customer_id","customer_id"},
                         {"customer_first_name","first_name"},
@@ -84,9 +80,9 @@ public class MockDataToStar {
         loadDim(stg,
                 "sale_product_id",
                 "sale_date",
-                new String[]{"product_name","product_category","product_weight","product_color","product_size","product_brand",
-                        "product_material","product_description","product_rating","product_reviews","product_release_date",
-                        "product_expiry_date","product_price"},
+                new String[]{"product_name","product_category","product_weight","product_color","product_size",
+                        "product_brand", "product_material","product_description","product_rating","product_reviews",
+                        "product_release_date", "product_expiry_date","product_price"},
                 new String[][]{
                         {"sale_product_id","product_id"},
                         {"product_name","name"},
@@ -123,7 +119,8 @@ public class MockDataToStar {
         loadDim(stg,
                 "supplier_name",
                 "sale_date",
-                new String[]{"supplier_contact","supplier_email","supplier_phone","supplier_address","supplier_city","supplier_country"},
+                new String[]{"supplier_contact","supplier_email","supplier_phone","supplier_address",
+                        "supplier_city","supplier_country"},
                 new String[][]{
                         {"supplier_name","name"},
                         {"supplier_contact","contact"},
@@ -135,7 +132,6 @@ public class MockDataToStar {
                 },
                 pgUrl, pgProps, "dim_supplier");
 
-        // 4) dim_date (sale_date уже DateType)
         Dataset<Row> dimDates = stg.select(col("sale_date"))
                 .filter(col("sale_date").isNotNull())
                 .distinct()
@@ -147,7 +143,6 @@ public class MockDataToStar {
 
         dimDates.write().mode(SaveMode.Append).jdbc(pgUrl, "dim_date", pgProps);
 
-        // 5) Читаем dims для join’ов (surrogate keys)
         Dataset<Row> dim_c   = spark.read().jdbc(pgUrl, "dim_customer", pgProps);
         Dataset<Row> dim_s   = spark.read().jdbc(pgUrl, "dim_seller",   pgProps);
         Dataset<Row> dim_p   = spark.read().jdbc(pgUrl, "dim_product",  pgProps);
@@ -155,7 +150,6 @@ public class MockDataToStar {
         Dataset<Row> dim_sup = spark.read().jdbc(pgUrl, "dim_supplier", pgProps);
         Dataset<Row> dim_d   = spark.read().jdbc(pgUrl, "dim_date",     pgProps);
 
-        // 6) fact_sales
         Dataset<Row> fact = stg
                 .join(dim_d,   stg.col("sale_date").equalTo(dim_d.col("sale_date")))
                 .join(dim_c,   stg.col("sale_customer_id").equalTo(dim_c.col("customer_id")))
@@ -180,7 +174,6 @@ public class MockDataToStar {
         log.info("MockData to Star ETL completed");
     }
 
-    // helper: строка с датой в одном из форматов -> Column(DateType)
     private static Column toDateAny(Column c) {
         return coalesce(
                 to_date(c, "M/d/yyyy"),
@@ -217,5 +210,6 @@ public class MockDataToStar {
 
         dfDim.write().mode(SaveMode.Append).jdbc(pgUrl, targetTable, pgProps);
         log.info("Dim table {} loaded", targetTable);
+        log.info("MockData to Star ETL done");
     }
 }

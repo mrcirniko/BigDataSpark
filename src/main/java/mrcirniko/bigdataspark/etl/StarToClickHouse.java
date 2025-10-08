@@ -19,9 +19,8 @@ import java.util.function.BiConsumer;
 public class StarToClickHouse {
 
     public static void run(SparkSession spark) {
-        log.info("Starting Star -> ClickHouse exports");
+        log.info("Starting Star to ClickHouse ETL");
 
-        // === PostgreSQL (читаем модель звезда) ===
         String pgHost = System.getenv().getOrDefault("POSTGRES_HOST", "postgres");
         String pgPort = System.getenv().getOrDefault("POSTGRES_PORT", "5432");
         String pgDb   = System.getenv().getOrDefault("POSTGRES_DB", "dbdb");
@@ -41,7 +40,6 @@ public class StarToClickHouse {
         Dataset<Row> dimStore    = spark.read().jdbc(pgUrl, "dim_store",    pgProps);
         Dataset<Row> dimSupplier = spark.read().jdbc(pgUrl, "dim_supplier", pgProps);
 
-        // Собираем "плоскую" таблицу продаж
         Dataset<Row> sales = fact
                 .join(dimProduct,  fact.col("product_sk").equalTo(dimProduct.col("product_sk")))
                 .join(dimCustomer, fact.col("customer_sk").equalTo(dimCustomer.col("customer_sk")))
@@ -74,7 +72,6 @@ public class StarToClickHouse {
                                 .otherwise(col("unit_price").multiply(col("sale_quantity")))
                 );
 
-        // === ClickHouse (куда пишем витрины) ===
         String chHost = System.getenv().getOrDefault("CH_HOST", "clickhouse");
         String chPort = System.getenv().getOrDefault("CH_PORT", "8123");
         String chDb   = System.getenv().getOrDefault("CH_DB", "reports");
@@ -82,10 +79,8 @@ public class StarToClickHouse {
         String chPass = System.getenv().getOrDefault("CH_PASSWORD", "");
         String chUrl  = String.format("jdbc:clickhouse://%s:%s/%s", chHost, chPort, chDb);
 
-        // создаём БД, если нет
         ensureClickHouseDb(chHost, chPort, chDb, chUser, chPass);
 
-        // Универсальная функция записи в ClickHouse
         BiConsumer<Dataset<Row>, String> saveCH = (df, table) -> {
             log.info("Saving table: {}", table);
             df.printSchema();
@@ -99,7 +94,6 @@ public class StarToClickHouse {
                     .save();
         };
 
-        // ---------- 1. Витрина по продуктам ----------
         Dataset<Row> prodAgg = sales.groupBy("product_id","product_name","category")
                 .agg(
                         sum("sale_quantity").alias("total_qty"),
@@ -121,7 +115,6 @@ public class StarToClickHouse {
                 .select("product_id","product_name","rating","reviews");
         saveCH.accept(productRatingReviews, "product_rating_reviews");
 
-        // ---------- 2. Витрина по клиентам ----------
         Dataset<Row> custAgg = sales.groupBy("customer_id","customer_first_name",
                         "customer_last_name","customer_country")
                 .agg(
@@ -143,7 +136,6 @@ public class StarToClickHouse {
                 .select("customer_id","customer_first_name","customer_last_name","avg_check");
         saveCH.accept(customerAvgCheck, "customer_avg_check");
 
-        // ---------- 3. Витрина по времени ----------
         Dataset<Row> monthlyTrends = sales.groupBy("year","month")
                 .agg(sum("amount").alias("total_revenue"),
                         count(lit(1)).alias("orders_cnt"),
@@ -156,7 +148,6 @@ public class StarToClickHouse {
                         avg("amount").alias("avg_order"));
         saveCH.accept(yearlyTrends, "time_yearly_trends");
 
-        // ---------- 4. Витрина по магазинам ----------
         Dataset<Row> storeAgg = sales.groupBy("store_name","store_city","store_country")
                 .agg(sum("amount").alias("total_revenue"),
                         count(lit(1)).alias("orders_cnt"),
@@ -175,7 +166,6 @@ public class StarToClickHouse {
         Dataset<Row> storeAvgCheck = storeAgg.select("store_name","avg_check");
         saveCH.accept(storeAvgCheck, "store_avg_check");
 
-        // ---------- 5. Витрина по поставщикам ----------
         Dataset<Row> supplierAgg = sales.groupBy("supplier_name","supplier_country")
                 .agg(sum("amount").alias("total_revenue"),
                         avg("unit_price").alias("avg_unit_price"),
@@ -195,7 +185,6 @@ public class StarToClickHouse {
                         sum("orders_cnt").alias("orders_cnt"));
         saveCH.accept(supplierByCountry, "supplier_by_country");
 
-        // ---------- 6. Витрина качества ----------
         WindowSpec wBest = Window.orderBy(col("rating").desc());
         WindowSpec wWorst = Window.orderBy(col("rating").asc());
 
@@ -219,10 +208,9 @@ public class StarToClickHouse {
                 .agg(corr(col("rating"), col("qty")).alias("pearson_corr"));
         saveCH.accept(corr, "quality_rating_sales_corr");
 
-        log.info("Star -> ClickHouse exports done");
+        log.info("Star to ClickHouse ETL done");
     }
 
-    // создаёт БД в ClickHouse, если нет
     private static void ensureClickHouseDb(String host, String port, String db, String user, String pass) {
         String rootUrl = String.format("jdbc:clickhouse://%s:%s", host, port);
         try (Connection c = DriverManager.getConnection(rootUrl, user, pass);
@@ -233,7 +221,6 @@ public class StarToClickHouse {
         }
     }
 
-    // Подбор ENGINE/ORDER BY под конкретную витрину
     private static String engineOrderByFor(String table) {
         if (table.equals("product_sales_top10"))       return "ENGINE = MergeTree ORDER BY (product_id)";
         if (table.equals("revenue_by_category"))       return "ENGINE = MergeTree ORDER BY (category)";

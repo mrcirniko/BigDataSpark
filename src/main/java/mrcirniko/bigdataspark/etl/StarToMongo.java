@@ -16,9 +16,8 @@ import java.util.Properties;
 public class StarToMongo {
 
     public static void run(SparkSession spark) {
-        log.info("Starting Star -> MongoDB exports");
+        log.info("Starting Star to MongoDB ETL");
 
-        // === PostgreSQL (читаем звезду) ===
         String pgHost = System.getenv().getOrDefault("POSTGRES_HOST", "postgres");
         String pgPort = System.getenv().getOrDefault("POSTGRES_PORT", "5432");
         String pgDb   = System.getenv().getOrDefault("POSTGRES_DB", "dbdb");
@@ -70,7 +69,6 @@ public class StarToMongo {
                 .otherwise( col("unit_price").multiply(col("sale_quantity")) )
             );
 
-        // === Mongo ===
         String mongoUri = System.getenv().getOrDefault("MONGO_URI", "mongodb://mongodb:27017");
         String mongoDb  = System.getenv().getOrDefault("MONGO_DB", "reports");
 
@@ -83,7 +81,6 @@ public class StarToMongo {
                 .mode(SaveMode.Overwrite)
                 .save();
 
-        // ---------- 1. Продукты ----------
         Dataset<Row> prodAgg = sales.groupBy("product_id","product_name","category")
             .agg(
                 sum("sale_quantity").alias("total_qty"),
@@ -105,7 +102,6 @@ public class StarToMongo {
             prodAgg.select("product_id","product_name","rating","reviews"),
             "product_rating_reviews");
 
-        // ---------- 2. Клиенты ----------
         Dataset<Row> custAgg = sales.groupBy("customer_id","customer_first_name","customer_last_name","customer_country")
             .agg(sum("amount").alias("total_amount"),
                  count(lit(1)).alias("orders_cnt"),
@@ -124,7 +120,6 @@ public class StarToMongo {
             custAgg.select("customer_id","customer_first_name","customer_last_name","avg_check"),
             "customer_avg_check");
 
-        // ---------- 3. Время ----------
         saveMongo.accept(
             sales.groupBy("year","month")
                  .agg(sum("amount").alias("total_revenue"),
@@ -139,7 +134,6 @@ public class StarToMongo {
                       avg("amount").alias("avg_order")),
             "time_yearly_trends");
 
-        // ---------- 4. Магазины ----------
         Dataset<Row> storeAgg = sales.groupBy("store_name","store_city","store_country")
             .agg(sum("amount").alias("total_revenue"),
                  count(lit(1)).alias("orders_cnt"),
@@ -160,7 +154,6 @@ public class StarToMongo {
             storeAgg.select("store_name","avg_check"),
             "store_avg_check");
 
-        // ---------- 5. Поставщики ----------
         Dataset<Row> supplierAgg = sales.groupBy("supplier_name","supplier_country")
             .agg(sum("amount").alias("total_revenue"),
                  avg("unit_price").alias("avg_unit_price"),
@@ -181,7 +174,6 @@ public class StarToMongo {
                             sum("orders_cnt").alias("orders_cnt")),
             "supplier_by_country");
 
-        // ---------- 6. Качество ----------
         WindowSpec wBest = Window.orderBy(col("rating").desc());
         WindowSpec wWorst= Window.orderBy(col("rating").asc());
 
@@ -206,6 +198,6 @@ public class StarToMongo {
                  .agg(corr(col("rating"), col("qty")).alias("pearson_corr")),
             "quality_rating_sales_corr");
 
-        log.info("Star -> MongoDB exports done");
+        log.info("Star to MongoDB ETL done");
     }
 }
